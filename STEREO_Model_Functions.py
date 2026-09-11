@@ -2,7 +2,7 @@
 """
 Functions used for STEREO Impact Modeling
 Syd Thomas
-Updated 9/10/2026
+Updated 9/11/2026
 
 """
 
@@ -11,6 +11,7 @@ import math
 from math import pi
 from scipy.linalg import null_space
 import scipy.signal
+import os
 
 m_p = 1.67*10**-27     # [kg] mass of a proton
 m_e = 9.109*10**-31    # [kg] mass of electron
@@ -378,3 +379,127 @@ def filter_V(V, time_range, gain, lowcut, highcut):
     V_filtered = scipy.signal.lfilter(b2, a2, V_filtered) # Apply lowpass
     V_filtered = gain*V_filtered
     return V_filtered
+
+### Data reading from raw CST data which is formatted uniquely
+# This version set up for STEREO which has SC and 3 antenna data keys
+# input 'mainDirectory' is address of a data folder within working directory
+def read_and_sort(mainDirectory):
+    directory = []
+    for foldername in os.listdir(mainDirectory):
+        # d is a string of the folder name
+        d = os.path.join(mainDirectory, foldername)
+        # skips dataless folders from mac transfer
+        if d.find('DS') > -1:
+            continue
+        else:
+            directory.append(d)
+    data = np.empty((1,5))
+    
+    # access data
+    for i in range(0,len(directory)):
+         # save z value from folder name
+         z = os.path.basename(directory[i])
+
+         # for each file in each z value
+         for filename in os.listdir(directory[i]):
+             fpath = os.path.join(directory[i], filename) # path to each file
+             
+             # Skipping the files that can't be decoded/no data read
+             if filename.find('._') > -1:
+                 print('WARNING: file skipped: ', filename)
+                 continue
+             
+             # if statements for string containing object
+             # capacitance matrixes for assigning these in the correct order
+             if filename.find('ANT1') > -1 or filename.find('A1') > -1:
+                 objName = 0
+             elif filename.find('ANT2') > -1 or filename.find('A2') > -1:
+                 objName = 1
+             elif filename.find('ANT3') > -1 or filename.find('A3') > -1:
+                 objName = 2
+             #elif filename.find('ANT4') > -1:
+                 #objName = 4
+             elif filename.find('SC') > -1:
+                 objName = 3
+             else:
+                 print('Error: object not found')
+    
+             # read file into temporary array
+             with open(fpath, 'r', encoding = 'utf-8', errors='ignore') as f:
+                lines = f.readlines()
+             fileData = [line.strip() for line in lines]
+             
+             # set empty arrays for storing variables
+             yVals = []
+             x = []
+             V = []
+             y = []
+             j = 0
+             for j in range(0,len(fileData)):
+                 #print(fileData[j])
+                 
+                 # find y values in the file data
+                 if fileData[j].find('y=') != -1: # if string contains y=
+                    # use string manipulation to isolate y
+                    start = fileData[j].find('y=') + 2
+                    end = fileData[j].rfind(')')
+                    #print('start/end: ', start, end)
+                    yVals.append(float(fileData[j][start:end]))
+                    
+                 elif fileData[j].find('ycp=') != -1:
+                     start = fileData[j].find('ycp=') + 4
+                     end = fileData[j].rfind(')')
+                     yVals.append(float(fileData[j][start:end]))
+                     
+                 elif fileData[j].find('y_cp=') != -1:
+                     start = fileData[j].find('y_cp=') + 5
+                     end = fileData[j].rfind(')')
+                     yVals.append(float(fileData[j][start:end]))
+                     
+                 elif fileData[j].find('y_prime') != -1:
+                     start = fileData[j].find('y_prime=') + 8
+                     end = fileData[j].rfind(')')
+                     yVals.append(float(fileData[j][start:end]))
+                     
+                 elif fileData[j].find('yprime') != -1:
+                     start = fileData[j].find('yprime=') + 7
+                     end = fileData[j].rfind(')')
+                     yVals.append(float(fileData[j][start:end]))
+                         
+                 # pull all x and V values, fill in y values
+                 elif fileData[j].find('\t') != -1:
+                    start = fileData[j].find('\t')
+                    end = fileData[j].find('\t') + 1
+                    x.append(float(fileData[j][0:start]))
+                    V.append(float(fileData[j][end:len(fileData[j])]))
+                    
+                    # append most recent y value to data  
+                    y.append(float(yVals[len(yVals)-1]))               
+
+             fileData2 = np.zeros((len(x),5))
+             j = 0
+             for j in range(0,len(x)):
+                 fileData2[j][0] = objName
+                 fileData2[j][1] = x[j]
+                 fileData2[j][2] = y[j]
+                 fileData2[j][3] = z
+                 fileData2[j][4] = V[j]
+                 
+             # add on to the larger data set
+             if len(fileData2) > 0:
+                 data = np.vstack((data, fileData2))
+             else:
+                 print ('WARNING: empty file data')             
+    
+    # clear empty row
+    data = np.delete(data, 0, axis=0)
+    
+    # keep unique data points
+    uniques = np.unique(data[:,:], axis=0)
+    #uniques = data[idx[1], :]
+    
+    # Sort data by positions and object for G calculation
+    sort_indexes = np.lexsort((uniques[:,0], uniques[:,3], uniques[:,2], uniques[:,1]))
+    dataSorted = uniques[sort_indexes]
+            
+    return dataSorted
